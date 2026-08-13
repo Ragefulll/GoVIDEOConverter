@@ -32,12 +32,12 @@ func main() {
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "GoVIDEOConverter",
-		Width:  1800,
+		Width:  1900,
 		Height: 1200,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 11, G: 16, B: 24, A: 1},
+		BackgroundColour: &options.RGBA{R: 23, G: 24, B: 28, A: 1},
 		OnStartup:        app.startup,
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop: true,

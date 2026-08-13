@@ -111,15 +111,16 @@ document.querySelector('#app').innerHTML = `
     </section>
     <div id="addModal" class="modal hidden">
       <div class="modal-card">
+        <div id="addProgress" class="card-fill"></div>
         <h2>Добавление в очередь</h2>
         <p id="addPhase">Сканирование</p>
-        <div class="modal-progress"><i id="addProgress"></i></div>
         <div class="modal-row"><span id="addFile">Подготовка...</span><strong id="addCount">0%</strong></div>
       </div>
     </div>
 
     <div id="ffmpegModal" class="modal hidden">
       <div class="modal-card ffmpeg-card">
+        <div id="ffmpegProgress" class="card-fill"></div>
         <h2 id="ffmpegTitle">Проверка FFmpeg</h2>
         <p id="ffmpegMsg">Поиск установленного FFmpeg...</p>
         <div id="ffmpegInstallRow" class="ffmpeg-actions hidden">
@@ -127,7 +128,6 @@ document.querySelector('#app').innerHTML = `
           <button id="ffmpegPickBtn">Выбрать папку вручную</button>
         </div>
         <div id="ffmpegProgressWrap" class="ffmpeg-progress hidden">
-          <div class="modal-progress"><i id="ffmpegProgress"></i></div>
           <div class="modal-row"><span id="ffmpegDetail">Подготовка...</span></div>
         </div>
       </div>
@@ -155,7 +155,6 @@ document.querySelector('#app').innerHTML = `
           <h2 id="updateTitle">Проверка обновлений</h2>
           <p id="updateMsg">Подключение к серверу...</p>
         </div>
-        <div class="update-bar"><i id="updateBar"></i></div>
         <div class="modal-row"><span id="updateDetail"></span><strong id="updatePct"></strong></div>
       </div>
     </div>
@@ -484,6 +483,7 @@ function setFfmpegState(mode, progress = 0, detail = '') {
     msg.textContent = 'Для обработки видео требуется FFmpeg. Скачайте и установите его автоматически или укажите папку с ffmpeg/ffprobe вручную.';
     row.classList.remove('hidden');
     wrap.classList.add('hidden');
+    bar.style.width = '0%';
   } else if (mode === 'installing') {
     title.textContent = 'Установка FFmpeg';
     msg.textContent = 'Загрузка и распаковка FFmpeg. Это может занять несколько минут.';
@@ -496,6 +496,7 @@ function setFfmpegState(mode, progress = 0, detail = '') {
     msg.textContent = detail || 'Не удалось установить FFmpeg.';
     row.classList.remove('hidden');
     wrap.classList.add('hidden');
+    bar.style.width = '0%';
   }
 }
 
@@ -707,7 +708,6 @@ function updateStatus(ev) {
   const modal = document.getElementById('updateModal');
   const card = document.getElementById('updateCard');
   const bg = document.getElementById('updateBg');
-  const bar = document.getElementById('updateBar');
   const icon = document.getElementById('updateIcon');
   const title = document.getElementById('updateTitle');
   const msg = document.getElementById('updateMsg');
@@ -727,21 +727,15 @@ function updateStatus(ev) {
   const full = () => {
     bg.classList.remove('indeterminate');
     bg.style.width = '100%';
-    bar.classList.remove('indeterminate');
-    bar.style.width = '100%';
   };
   if (ev.status === 'check') {
     bg.classList.add('indeterminate');
     bg.style.width = '';
-    bar.classList.add('indeterminate');
-    bar.style.width = '100%';
     set('Проверка обновлений', `Текущая версия: v${ev.current || '-'}`, 'Подключение к серверу...', '', UPDATE_ICONS.spinner);
   } else if (ev.status === 'downloading') {
     bg.classList.remove('indeterminate');
-    bar.classList.remove('indeterminate');
     const pr = Math.max(0, Math.min(100, ev.progress || 0));
     bg.style.width = `${pr}%`;
-    bar.style.width = `${pr}%`;
     set('Доступно обновление', `Загружается версия v${ev.remote || ''}`, ev.detail || '', `${Math.round(pr)}%`, UPDATE_ICONS.download);
   } else if (ev.status === 'restarting') {
     full();
