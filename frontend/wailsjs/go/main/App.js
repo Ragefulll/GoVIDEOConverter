@@ -10,6 +10,10 @@ export function AppVersion() {
   return window['go']['main']['App']['AppVersion']();
 }
 
+export function CPUCount() {
+  return window['go']['main']['App']['CPUCount']();
+}
+
 export function CancelFile(arg1) {
   return window['go']['main']['App']['CancelFile'](arg1);
 }

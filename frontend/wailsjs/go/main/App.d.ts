@@ -6,6 +6,8 @@ export function AddPaths(arg1:Array<string>):Promise<Array<main.VideoItem>>;
 
 export function AppVersion():Promise<string>;
 
+export function CPUCount():Promise<number>;
+
 export function CancelFile(arg1:string):Promise<void>;
 
 export function CancelProcessing():Promise<void>;

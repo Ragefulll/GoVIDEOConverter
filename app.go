@@ -222,11 +222,23 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
+func (a *App) CPUCount() int {
+	return cpuThreads()
+}
+
+func defaultThrottle() int {
+	n := cpuThreads()
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
 func (a *App) DefaultSettings() Settings {
 	s := Settings{
 		Resolution: "1080", Resolutions: []string{"1080"}, Codec: "h264", Encoder: "auto", Container: "mp4",
 		BitDepth: 8, CRF: 23, BitrateKbps: 5000, MaxrateKbps: 6000, BufsizeKbps: 12000,
-		CompressionMode: "bitrate", Preset: "medium", Throttle: 4, RemoveAudio: true,
+		CompressionMode: "bitrate", Preset: "medium", Throttle: defaultThrottle(), RemoveAudio: true,
 		OutputPrefix: "_", PreserveAspectLetter: true, ValidateDecode: true,
 		BitrateByResolution: map[string]ResolutionBitrate{
 			"360":  {BitrateKbps: 800, MaxrateKbps: 1000, BufsizeKbps: 2000},

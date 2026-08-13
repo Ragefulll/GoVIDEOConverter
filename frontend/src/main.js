@@ -1,5 +1,5 @@
 import './style.css';
-import { AddPaths, AppVersion, CancelFile, CancelProcessing, CheckFFmpeg, CheckUpdates, ClearFiles, DefaultSettings, ExportPresets, HasPreviewProxy, ImportPresets, InstallFFmpeg, ListFiles, MakePreviewProxy, PickFFmpeg, RemoveFile, StartFile, StartProcessing } from '../wailsjs/go/main/App';
+import { AddPaths, AppVersion, CPUCount, CancelFile, CancelProcessing, CheckFFmpeg, CheckUpdates, ClearFiles, DefaultSettings, ExportPresets, HasPreviewProxy, ImportPresets, InstallFFmpeg, ListFiles, MakePreviewProxy, PickFFmpeg, RemoveFile, StartFile, StartProcessing } from '../wailsjs/go/main/App';
 import { EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime';
 
 const state = { files: [], selected: null, settings: null, running: false, adding: false, ffmpeg: null, ffmpegChecked: false, activeResolution: '1080', resBitrates: {} };
@@ -73,7 +73,7 @@ document.querySelector('#app').innerHTML = `
       ${field('maxrateKbps', `Maxrate <span class="res-tag" id="maxrateResLabel">(1080)</span>, kbps`, `<input id="maxrateKbps" type="number" value="6000" />`)}
       ${field('bufsizeKbps', `Bufsize <span class="res-tag" id="bufsizeResLabel">(1080)</span>, kbps`, `<input id="bufsizeKbps" type="number" value="12000" />`)}
       ${field('bitDepth', 'Bit depth', `<select id="bitDepth">${options(['8','10'], '8')}</select>`)}
-      ${field('throttle', 'Потоки', `<input id="throttle" type="number" min="1" max="16" value="4" />`)}
+      ${field('throttle', 'Потоки', `<input id="throttle" type="number" min="1" value="4" />`)}
       ${field('outputPrefix', 'Префикс', `<input id="outputPrefix" value="_" />`)}
       ${field('outputDirectory', 'Папка вывода', `<input id="outputDirectory" placeholder="пусто = рядом с исходником" />`, 'wide')}
       ${checkField('removeAudio', 'убрать аудио')}
@@ -101,7 +101,7 @@ document.querySelector('#app').innerHTML = `
 
     <section class="workspace">
       <div class="queue">
-        <div class="panel-head"><h2>Очередь</h2><span id="count">0 файлов</span></div>
+        <div class="panel-head queue-head"><h2>Очередь</h2><span id="count">0 файлов</span><div id="queueFill" class="panel-fill"></div></div>
         <div id="fileList" class="file-list"></div>
       </div>
       <aside class="details">
@@ -348,6 +348,12 @@ function render() {
 function renderQueueSummary() {
   const summary = queueSummary();
   document.getElementById('count').textContent = `${summary.total} видео | готово ${summary.done} | в процессе ${summary.processing}`;
+  const fill = document.getElementById('queueFill');
+  if (fill) {
+    const pct = summary.total > 0 ? Math.round(summary.progress / summary.total) : 0;
+    fill.style.setProperty('--progress', `${Math.max(0, Math.min(100, pct))}%`);
+    fill.classList.toggle('done', summary.total > 0 && pct >= 100);
+  }
 }
 
 function queueSummary() {
@@ -355,10 +361,17 @@ function queueSummary() {
   const processingStatuses = new Set(['Обработка', 'В очереди']);
   return state.files.reduce((acc, file) => {
     acc.total += 1;
-    if (doneStatuses.has(file.status)) acc.done += 1;
-    if (processingStatuses.has(file.status)) acc.processing += 1;
+    if (doneStatuses.has(file.status)) {
+      acc.done += 1;
+      acc.progress += 100;
+    } else if (processingStatuses.has(file.status)) {
+      acc.processing += 1;
+      acc.progress += Math.max(0, Math.min(100, file.progress || 0));
+    } else {
+      acc.progress += Math.max(0, Math.min(100, file.progress || 0));
+    }
     return acc;
-  }, { total: 0, done: 0, processing: 0 });
+  }, { total: 0, done: 0, processing: 0, progress: 0 });
 }
 
 function statusClass(file) {
@@ -1141,6 +1154,13 @@ seedResBitrates();
 AppVersion().then(v => { document.getElementById('versionBadge').textContent = v ? `v${v}` : ''; });
 CheckUpdates();
 DefaultSettings().then(s => { state.settings = s; applySettings(s); });
+CPUCount().then(cpus => {
+  const el = document.getElementById('throttle');
+  if (el) {
+    el.max = cpus;
+    if (!Number(el.value) || Number(el.value) > cpus) el.value = cpus;
+  }
+});
 ListFiles().then(files => { state.files = files; render(); });
 checkFfmpeg();
 renderPresetSelect();
