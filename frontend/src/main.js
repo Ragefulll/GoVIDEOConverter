@@ -1,5 +1,5 @@
 import './style.css';
-import { AddPaths, AppVersion, CancelFile, CancelProcessing, CheckFFmpeg, CheckUpdates, ClearFiles, DefaultSettings, ExportPresets, ImportPresets, InstallFFmpeg, ListFiles, PickFFmpeg, RemoveFile, StartFile, StartProcessing } from '../wailsjs/go/main/App';
+import { AddPaths, AppVersion, CancelFile, CancelProcessing, CheckFFmpeg, CheckUpdates, ClearFiles, DefaultSettings, ExportPresets, HasPreviewProxy, ImportPresets, InstallFFmpeg, ListFiles, MakePreviewProxy, PickFFmpeg, RemoveFile, StartFile, StartProcessing } from '../wailsjs/go/main/App';
 import { EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime';
 
 const state = { files: [], selected: null, settings: null, running: false, adding: false, ffmpeg: null, ffmpegChecked: false, activeResolution: '1080', resBitrates: {} };
@@ -105,7 +105,35 @@ document.querySelector('#app').innerHTML = `
         <div id="fileList" class="file-list"></div>
       </div>
       <aside class="details">
-        <div class="panel-head"><h2>Метаданные</h2><span id="statusBadge">нет выбора</span></div>
+        <div class="panel-head"><h2>Предпросмотр</h2><span id="statusBadge">нет выбора</span></div>
+        <div id="previewWrap" class="preview-wrap empty">
+          <video id="previewVideo" preload="metadata" playsinline></video>
+          <div class="seek-wrap">
+            <div class="seek-track"></div>
+            <div id="seekFill" class="seek-fill"></div>
+            <div id="seekThumb" class="seek-thumb"></div>
+            <input id="seekBar" type="range" min="0" max="0" value="0" step="any" disabled title="Перемотка">
+            <div id="seekInfo" class="seek-info"></div>
+            <div id="seekTip" class="seek-tip hidden"><div id="seekTipText" class="seek-tip-text"></div></div>
+          </div>
+          <div class="transport">
+            <button id="transportPrev" class="icon-btn" title="Предыдущий кадр"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h2v14H7zM18 5l-9 7 9 7z"/></svg></button>
+            <button id="transportMinus" class="transport-text" title="Назад на 1 секунду">−1 с</button>
+            <button id="transportPlay" class="icon-btn primary" title="Play / Pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></button>
+            <button id="transportPlus" class="transport-text" title="Вперёд на 1 секунду">+1 с</button>
+            <button id="transportNext" class="icon-btn" title="Следующий кадр"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5h2v14h-2zM6 5l9 7-9 7z"/></svg></button>
+          </div>
+          <div id="previewTime" class="preview-time">0:00 / 0:00</div>
+          <div id="previewHint" class="preview-hint hidden">
+            <span>Формат не поддерживается для прямого просмотра. Можно создать превью через FFmpeg.</span>
+            <button id="makePreviewBtn" class="primary">Создать превью</button>
+          </div>
+          <div id="previewMaking" class="preview-making hidden">
+            <div id="previewMakingBar" class="card-fill"></div>
+            <div class="modal-row"><span>Создание превью через FFmpeg...</span><strong id="previewMakingPct">0%</strong></div>
+          </div>
+        </div>
+        <div class="panel-head meta-head"><h2>Метаданные</h2></div>
         <div id="meta" class="meta empty">Выберите видео в очереди.</div>
       </aside>
     </section>
@@ -297,8 +325,7 @@ function mergeFiles(existing, added) {
 }
 
 function render() {
-  const summary = queueSummary();
-  document.getElementById('count').textContent = `${summary.total} видео | готово ${summary.done} | в процессе ${summary.processing}`;
+  renderQueueSummary();
   const list = document.getElementById('fileList');
   list.innerHTML = state.files.map(file => `
     <article class="file ${statusClass(file)} ${file.id === state.selected ? 'selected' : ''}" data-id="${file.id}" style="--progress:${Math.max(0, Math.min(100, file.progress || 0))}%">
@@ -316,6 +343,11 @@ function render() {
   list.querySelectorAll('.file').forEach(card => card.addEventListener('click', () => { state.selected = card.dataset.id; render(); }));
   list.querySelectorAll('[data-action]').forEach(btn => btn.addEventListener('click', handleFileAction));
   renderMeta();
+}
+
+function renderQueueSummary() {
+  const summary = queueSummary();
+  document.getElementById('count').textContent = `${summary.total} видео | готово ${summary.done} | в процессе ${summary.processing}`;
 }
 
 function queueSummary() {
@@ -365,6 +397,10 @@ async function handleFileAction(event) {
 function renderMeta() {
   const file = state.files.find(f => f.id === state.selected);
   document.getElementById('statusBadge').textContent = file ? file.status : 'нет выбора';
+  if (state.selected !== previewId) {
+    previewId = state.selected;
+    loadPreview(file);
+  }
   const meta = document.getElementById('meta');
   if (!file) {
     meta.className = 'meta empty';
@@ -373,17 +409,56 @@ function renderMeta() {
   }
   meta.className = 'meta';
   const m = file.meta;
+  const colorInfo = [m.colorSpace, m.colorTransfer, m.colorPrimaries, m.colorRange].filter(Boolean).join(', ');
   meta.innerHTML = `
     <h3>${escapeHtml(file.name)}</h3>
     <dl>
       <dt>Путь</dt><dd>${escapeHtml(file.path)}</dd>
-      <dt>Видео</dt><dd>${m.width}x${m.height}, ${escapeHtml(m.codec || '-')}, ${escapeHtml(m.pixelFormat || '-')}</dd>
-      <dt>FPS</dt><dd>${escapeHtml(m.fps || '-')}</dd>
+    </dl>
+    <h4 class="meta-head">Формат</h4>
+    <dl>
+      <dt>Контейнер</dt><dd>${escapeHtml(m.format || '-')}${m.formatLongName ? ' — ' + escapeHtml(m.formatLongName) : ''}</dd>
+      <dt>Размер файла</dt><dd>${fmtSize(m.fileSize || file.size)}</dd>
       <dt>Длительность</dt><dd>${formatDuration(m.duration)}</dd>
-      <dt>Битрейт</dt><dd>${m.bitrate ? Math.round(m.bitrate / 1000) + ' kbps' : '-'}</dd>
-      <dt>Аудио</dt><dd>${escapeHtml(m.audioCodec || 'нет')}</dd>
-      <dt>Контейнер</dt><dd>${escapeHtml(m.format || '-')}</dd>
-      <dt>Rotation</dt><dd>${m.rotation || 0}</dd>
+      <dt>Битрейт</dt><dd>${fmtKbps(m.bitrate)}</dd>
+      <dt>Кодировщик</dt><dd>${escapeHtml(m.encoder || '-')}</dd>
+      <dt>Создан</dt><dd>${escapeHtml(m.creationTime || '-')}</dd>
+      <dt>Потоков</dt><dd>${m.streamCount ? fmtInt(m.streamCount) : '-'}</dd>
+    </dl>
+    <h4 class="meta-head">Видео</h4>
+    <dl>
+      <dt>Кодек</dt><dd>${escapeHtml(m.codec || '-')}</dd>
+      <dt>Профиль</dt><dd>${escapeHtml(m.videoProfile || '-')}</dd>
+      <dt>Уровень</dt><dd>${escapeHtml(m.videoLevel || '-')}</dd>
+      <dt>Разрешение</dt><dd>${m.width}x${m.height}</dd>
+      <dt>Соотношение</dt><dd>${escapeHtml(m.aspectRatio || '-')}</dd>
+      <dt>Пиксельный формат</dt><dd>${escapeHtml(m.pixelFormat || '-')}</dd>
+      <dt>Битовая глубина</dt><dd>${m.bitDepth ? m.bitDepth + ' бит' : '-'}</dd>
+      <dt>FPS</dt><dd>${escapeHtml(m.fps || '-')}${m.avgFps && m.avgFps !== m.fps ? ' (ср. ' + escapeHtml(m.avgFps) + ')' : ''}</dd>
+      <dt>Битрейт</dt><dd>${fmtKbps(m.bitrateVideo)}</dd>
+      <dt>Maxrate</dt><dd>${fmtKbps(m.maxBitrate)}</dd>
+      <dt>Кадров</dt><dd>${fmtInt(m.nbFrames)}</dd>
+      <dt>B-кадры</dt><dd>${m.hasBFrames ? 'есть' : 'нет'}</dd>
+      <dt>Цвет</dt><dd>${escapeHtml(colorInfo) || '-'}</dd>
+      <dt>Чересстрочность</dt><dd>${escapeHtml(m.fieldOrder || '-')}</dd>
+      <dt>Rotation</dt><dd>${m.rotation ? m.rotation + '°' : '-'}</dd>
+    </dl>
+    <h4 class="meta-head">Аудио</h4>
+    <dl>
+      <dt>Кодек</dt><dd>${escapeHtml(m.audioCodec || 'нет')}</dd>
+      <dt>Битрейт</dt><dd>${fmtKbps(m.audioBitrate)}</dd>
+      <dt>Частота</dt><dd>${m.audioSampleRate ? fmtInt(m.audioSampleRate) + ' Гц' : '-'}</dd>
+      <dt>Каналы</dt><dd>${m.audioChannels ? m.audioChannels + (m.audioChannelLayout ? ' (' + escapeHtml(m.audioChannelLayout) + ')' : '') : '-'}</dd>
+      <dt>Глубина</dt><dd>${m.audioBitDepth ? m.audioBitDepth + ' бит' : '-'}</dd>
+      <dt>Длительность</dt><dd>${m.audioDuration ? formatDuration(m.audioDuration) : '-'}</dd>
+      <dt>Кадров</dt><dd>${fmtInt(m.audioNbFrames)}</dd>
+    </dl>
+    <h4 class="meta-head">Другие потоки</h4>
+    <dl>
+      <dt>Субтитры</dt><dd>${escapeHtml(m.subtitleCodec || 'нет')}</dd>
+      <dt>Данные</dt><dd>${escapeHtml(m.dataCodec || 'нет')}</dd>
+    </dl>
+    <dl>
       <dt>Выход</dt><dd>${escapeHtml(file.output || 'будет рассчитан при обработке')}</dd>
     </dl>
   `;
@@ -392,12 +467,294 @@ function renderMeta() {
 function updateFileProgress(ev) {
   const file = state.files.find(f => f.id === ev.id);
   if (!file) return;
+  const statusChanged = file.status !== ev.status;
   file.status = ev.status;
   file.progress = Math.max(0, Math.min(100, ev.progress || file.progress || 0));
   file.output = ev.output || file.output;
   file.error = ev.error || '';
-  render();
+  const card = document.querySelector(`.file[data-id="${CSS.escape(ev.id)}"]`);
+  if (card) {
+    card.className = `file ${statusClass(file)}${file.id === state.selected ? ' selected' : ''}`;
+    card.style.setProperty('--progress', `${file.progress}%`);
+    const rows = card.querySelectorAll('.file-row');
+    if (rows[0]) rows[0].lastElementChild.textContent = `${file.progress.toFixed(0)}%`;
+    if (rows[1]) rows[1].firstElementChild.textContent = file.status;
+    if (file.error) {
+      let err = card.querySelector('.error');
+      if (!err) {
+        err = document.createElement('div');
+        err.className = 'error';
+        card.appendChild(err);
+      }
+      err.textContent = file.error;
+    } else {
+      const err = card.querySelector('.error');
+      if (err) err.remove();
+    }
+  }
+  renderQueueSummary();
+  if (statusChanged && file.id === state.selected) renderMeta();
 }
+
+let previewId = null;
+let previewFps = 30;
+const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+const PAUSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>';
+
+const previewVideo = document.getElementById('previewVideo');
+const transportPlay = document.getElementById('transportPlay');
+const seekBar = document.getElementById('seekBar');
+const seekFill = document.getElementById('seekFill');
+const seekThumb = document.getElementById('seekThumb');
+const seekTip = document.getElementById('seekTip');
+const seekTipText = document.getElementById('seekTipText');
+
+function fmtTime(t) {
+  if (!isFinite(t) || t < 0) t = 0;
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = Math.floor(t % 60);
+  const frac = String(Math.round((t - Math.floor(t)) * 100000)).padStart(5, '0');
+  const base = h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
+  return `${base}.${frac}`;
+}
+
+function setPreviewTime(forceCur) {
+  const el = document.getElementById('previewTime');
+  const info = document.getElementById('seekInfo');
+  const rawCur = isFinite(forceCur) ? forceCur : previewVideo.currentTime;
+  const cur = isFinite(rawCur) && rawCur > 0 ? rawCur : 0;
+  const dur = previewVideo.duration;
+  const noVideo = !isFinite(dur) || dur <= 0;
+  seekBar.max = noVideo ? 0 : dur;
+  seekBar.value = noVideo ? 0 : cur;
+  seekBar.disabled = noVideo;
+  updateSeekUI(noVideo ? 0 : cur / dur);
+  const fps = previewFps || 30;
+  const totalFrames = noVideo ? 0 : Math.floor(dur * fps);
+  const curFrame = noVideo ? 0 : Math.min(Math.floor(cur * fps) + 1, totalFrames);
+  info.textContent = noVideo ? '' : `${fmtTime(cur)} | кадр ${curFrame}/${totalFrames}`;
+  el.textContent = noVideo
+    ? '0:00 / 0:00'
+    : `${fmtTime(cur)} (${cur.toFixed(5)}с) / ${fmtTime(dur)} (${dur.toFixed(5)}с)`;
+}
+
+let makingProxy = false;
+let previewSrcKind = 'none'; // 'none' | 'native' | 'proxy'
+const DEFAULT_HINT = 'Формат не поддерживается для прямого просмотра. Можно создать превью через FFmpeg.';
+
+function setPreviewSrc(path, kind) {
+  previewSrcKind = kind;
+  document.getElementById('previewWrap').classList.remove('no-video');
+  hidePreviewHint();
+  hidePreviewMaking();
+  previewVideo.pause();
+  previewVideo.removeAttribute('src');
+  previewVideo.load();
+  previewVideo.src = `/preview/?path=${encodeURIComponent(path)}`;
+  previewVideo.load();
+  transportPlay.innerHTML = PLAY_ICON;
+  setPreviewTime();
+}
+
+function loadPreview(file) {
+  const wrap = document.getElementById('previewWrap');
+  makingProxy = false;
+  resetPreviewHint();
+  hidePreviewHint();
+  hidePreviewMaking();
+  if (!file || !file.path) {
+    previewSrcKind = 'none';
+    previewVideo.pause();
+    previewVideo.removeAttribute('src');
+    previewVideo.load();
+    transportPlay.innerHTML = PLAY_ICON;
+    wrap.classList.add('empty');
+    wrap.classList.remove('no-video');
+    setPreviewTime();
+    return;
+  }
+  previewFps = parseFloat(file.meta && file.meta.fps) || 30;
+  wrap.classList.remove('empty');
+  if (!isNativelyPlayable(file)) {
+    wrap.classList.add('no-video');
+    checkPreviewCache(file);
+    return;
+  }
+  setPreviewSrc(file.path, 'native');
+}
+
+function isNativelyPlayable(file) {
+  if (!file || !file.meta) return true;
+  const codec = String(file.meta.codec || '').toLowerCase();
+  const fmt = String(file.meta.format || '').toLowerCase();
+  const containers = ['mp4', 'quicktime', 'webm', 'ogg', 'mov'];
+  if (!containers.some(c => fmt.includes(c))) return false;
+  const badCodecs = ['prores', 'ffv1', 'mpeg2video', 'mpeg4', 'msmpeg4', 'wmv2', 'wmv3', 'vc1'];
+  return badCodecs.every(bad => !codec.includes(bad));
+}
+
+async function checkPreviewCache(file) {
+  try {
+    const proxy = await HasPreviewProxy(file.path);
+    if (proxy) setPreviewSrc(proxy, 'proxy');
+    else showPreviewHint();
+  } catch (error) {
+    showPreviewHint();
+  }
+}
+
+function resetPreviewHint() {
+  const hint = document.getElementById('previewHint');
+  hint.querySelector('span').textContent = DEFAULT_HINT;
+  hint.querySelector('button').classList.remove('hidden');
+}
+
+function showPreviewHint() {
+  hidePreviewMaking();
+  document.getElementById('previewHint').classList.remove('hidden');
+}
+
+function hidePreviewHint() {
+  document.getElementById('previewHint').classList.add('hidden');
+}
+
+function showPreviewMaking() {
+  makingProxy = true;
+  hidePreviewHint();
+  document.getElementById('previewWrap').classList.add('no-video');
+  document.getElementById('previewMaking').classList.remove('hidden');
+  setPreviewMakingPct(0);
+}
+
+function hidePreviewMaking() {
+  makingProxy = false;
+  document.getElementById('previewMaking').classList.add('hidden');
+}
+
+function setPreviewMakingPct(p) {
+  p = Math.max(0, Math.min(100, p || 0));
+  document.getElementById('previewMakingBar').style.width = `${p}%`;
+  document.getElementById('previewMakingPct').textContent = `${Math.round(p)}%`;
+}
+
+function onPreviewProxyProgress(ev) {
+  setPreviewMakingPct(ev && ev.progress);
+}
+
+async function makePreview() {
+  const file = state.files.find(f => f.id === state.selected);
+  if (!file || makingProxy) return;
+  const id = file.id;
+  showPreviewMaking();
+  try {
+    const proxy = await MakePreviewProxy(file.path);
+    if (state.selected === id && proxy) setPreviewSrc(proxy, 'proxy');
+  } catch (error) {
+    if (state.selected === id) {
+      hidePreviewMaking();
+      resetPreviewHint();
+      document.getElementById('previewHint').querySelector('span').textContent = `Не удалось создать превью: ${error}`;
+      showPreviewHint();
+    }
+  }
+}
+
+function stepFrame(dir) {
+  if (!previewVideo.src || !previewVideo.duration) return;
+  previewVideo.pause();
+  previewVideo.currentTime = Math.min(Math.max(0, previewVideo.currentTime + dir * (1 / previewFps)), previewVideo.duration);
+}
+
+function stepSeconds(dir) {
+  if (!previewVideo.src || !previewVideo.duration) return;
+  previewVideo.currentTime = Math.min(Math.max(0, previewVideo.currentTime + dir), previewVideo.duration);
+}
+
+function togglePlay() {
+  if (previewVideo.paused) previewVideo.play().catch(() => {});
+  else previewVideo.pause();
+}
+
+previewVideo.addEventListener('play', () => { transportPlay.innerHTML = PAUSE_ICON; });
+previewVideo.addEventListener('pause', () => { transportPlay.innerHTML = PLAY_ICON; });
+previewVideo.addEventListener('loadedmetadata', setPreviewTime);
+previewVideo.addEventListener('durationchange', setPreviewTime);
+previewVideo.addEventListener('timeupdate', () => { if (!scrubbing) setPreviewTime(); });
+previewVideo.addEventListener('seeked', setPreviewTime);
+
+let scrubbing = false;
+let seekFrac = 0;
+
+function updateSeekUI(frac) {
+  seekFrac = frac;
+  const w = seekBar.clientWidth;
+  const trackW = Math.max(0, w - 8);
+  const center = 4 + frac * trackW;
+  const pos = Math.max(0, center - 3);
+  seekFill.style.width = `${frac * trackW}px`;
+  seekThumb.style.left = `${pos}px`;
+}
+window.addEventListener('resize', () => {
+  if (!seekBar.disabled) updateSeekUI(seekFrac);
+});
+
+seekBar.addEventListener('pointerdown', () => { scrubbing = true; });
+seekBar.addEventListener('input', () => {
+  const val = parseFloat(seekBar.value);
+  if (isFinite(val) && previewVideo.duration) {
+    previewVideo.currentTime = val;
+    setPreviewTime(val);
+  }
+});
+seekBar.addEventListener('pointerup', () => { scrubbing = false; });
+seekBar.addEventListener('keyup', () => { scrubbing = false; });
+seekBar.addEventListener('change', () => { scrubbing = false; });
+window.addEventListener('pointerup', () => { scrubbing = false; });
+
+function updateSeekTip(clientX) {
+  const dur = previewVideo.duration;
+  if (seekBar.disabled || !isFinite(dur) || dur <= 0) return;
+  const rect = seekBar.getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  const t = frac * dur;
+  const fps = previewFps || 30;
+  seekTipText.textContent = `${fmtTime(t)} | кадр ${Math.floor(t * fps) + 1}`;
+  const x = Math.max(6, Math.min(rect.width - 6, clientX - rect.left));
+  seekTip.style.left = `${x}px`;
+  seekTip.classList.remove('hidden');
+}
+
+seekBar.addEventListener('pointermove', e => updateSeekTip(e.clientX));
+seekBar.addEventListener('pointerleave', () => seekTip.classList.add('hidden'));
+previewVideo.addEventListener('error', async () => {
+  if (makingProxy) return;
+  const wrap = document.getElementById('previewWrap');
+  if (previewSrcKind === 'proxy') {
+    resetPreviewHint();
+    document.getElementById('previewHint').querySelector('span').textContent = 'Не удалось воспроизвести созданное превью.';
+    wrap.classList.add('no-video');
+    showPreviewHint();
+    return;
+  }
+  const file = state.files.find(f => f.id === state.selected);
+  if (file && !isNativelyPlayable(file)) {
+    try {
+      const proxy = await HasPreviewProxy(file.path);
+      if (proxy) {
+        setPreviewSrc(proxy, 'proxy');
+        return;
+      }
+    } catch (e) { /* ignore */ }
+  }
+  previewSrcKind = 'none';
+  wrap.classList.add('no-video');
+  showPreviewHint();
+});
+document.getElementById('transportPrev').addEventListener('click', () => stepFrame(-1));
+document.getElementById('transportNext').addEventListener('click', () => stepFrame(1));
+document.getElementById('transportMinus').addEventListener('click', () => stepSeconds(-1));
+document.getElementById('transportPlus').addEventListener('click', () => stepSeconds(1));
+transportPlay.addEventListener('click', togglePlay);
+document.getElementById('makePreviewBtn').addEventListener('click', makePreview);
 
 function showAddModal() {
   state.adding = true;
@@ -430,6 +787,23 @@ function formatDuration(sec) {
   if (!sec) return '-';
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
   return h ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function fmtInt(value) {
+  return value ? Number(value).toLocaleString('ru-RU') : '-';
+}
+
+function fmtKbps(value) {
+  if (!value || value <= 0) return '-';
+  if (value >= 1000000) return `${(value / 1000000).toFixed(2).replace('.', ',')} Мбит/с`;
+  if (value >= 1000) return `${Math.round(value / 1000)} кбит/с`;
+  return `${Math.round(value)} бит/с`;
+}
+
+function fmtSize(bytes) {
+  if (!bytes || bytes <= 0) return '-';
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2).replace('.', ',')} ГБ`;
+  return `${(bytes / 1e6).toFixed(1).replace('.', ',')} МБ`;
 }
 
 function escapeHtml(value) {
@@ -691,9 +1065,11 @@ EventsOn('file-progress', updateFileProgress);
 EventsOn('queue-add-progress', updateAddProgress);
 EventsOn('processing-finished', async () => { state.running = false; state.files = await ListFiles(); render(); });
 EventsOn('ffmpeg-install-progress', event => setFfmpegState('installing', event.progress, event.detail || event.phase));
-EventsOn('ffmpeg-installed', checkFfmpeg);
-EventsOn('update-status', updateStatus);
+  EventsOn('ffmpeg-installed', checkFfmpeg);
 
+  EventsOn('preview-proxy-progress', onPreviewProxyProgress);
+
+  EventsOn('update-status', updateStatus);
 let updateTimer = null;
 
 const UPDATE_ICONS = {

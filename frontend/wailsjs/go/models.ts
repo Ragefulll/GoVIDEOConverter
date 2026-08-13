@@ -146,6 +146,35 @@ export namespace main {
 	    format: string;
 	    rotation: number;
 	    creationTime: string;
+	    formatLongName: string;
+	    fileSize: number;
+	    encoder: string;
+	    videoProfile: string;
+	    videoLevel: string;
+	    avgFps: string;
+	    durationVideo: number;
+	    bitrateVideo: number;
+	    maxBitrate: number;
+	    codecTag: string;
+	    nbFrames: number;
+	    hasBFrames: number;
+	    aspectRatio: string;
+	    colorSpace: string;
+	    colorTransfer: string;
+	    colorPrimaries: string;
+	    colorRange: string;
+	    fieldOrder: string;
+	    bitDepth: number;
+	    audioSampleRate: number;
+	    audioChannels: number;
+	    audioChannelLayout: string;
+	    audioBitrate: number;
+	    audioBitDepth: number;
+	    audioDuration: number;
+	    audioNbFrames: number;
+	    subtitleCodec: string;
+	    dataCodec: string;
+	    streamCount: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new VideoMetadata(source);
@@ -164,6 +193,35 @@ export namespace main {
 	        this.format = source["format"];
 	        this.rotation = source["rotation"];
 	        this.creationTime = source["creationTime"];
+	        this.formatLongName = source["formatLongName"];
+	        this.fileSize = source["fileSize"];
+	        this.encoder = source["encoder"];
+	        this.videoProfile = source["videoProfile"];
+	        this.videoLevel = source["videoLevel"];
+	        this.avgFps = source["avgFps"];
+	        this.durationVideo = source["durationVideo"];
+	        this.bitrateVideo = source["bitrateVideo"];
+	        this.maxBitrate = source["maxBitrate"];
+	        this.codecTag = source["codecTag"];
+	        this.nbFrames = source["nbFrames"];
+	        this.hasBFrames = source["hasBFrames"];
+	        this.aspectRatio = source["aspectRatio"];
+	        this.colorSpace = source["colorSpace"];
+	        this.colorTransfer = source["colorTransfer"];
+	        this.colorPrimaries = source["colorPrimaries"];
+	        this.colorRange = source["colorRange"];
+	        this.fieldOrder = source["fieldOrder"];
+	        this.bitDepth = source["bitDepth"];
+	        this.audioSampleRate = source["audioSampleRate"];
+	        this.audioChannels = source["audioChannels"];
+	        this.audioChannelLayout = source["audioChannelLayout"];
+	        this.audioBitrate = source["audioBitrate"];
+	        this.audioBitDepth = source["audioBitDepth"];
+	        this.audioDuration = source["audioDuration"];
+	        this.audioNbFrames = source["audioNbFrames"];
+	        this.subtitleCodec = source["subtitleCodec"];
+	        this.dataCodec = source["dataCodec"];
+	        this.streamCount = source["streamCount"];
 	    }
 	}
 	export class VideoItem {

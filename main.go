@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/wailsapp/wails/v2"
@@ -35,10 +37,12 @@ func main() {
 		Width:  1900,
 		Height: 1200,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:  assets,
+			Handler: http.HandlerFunc(previewHandler),
 		},
 		BackgroundColour: &options.RGBA{R: 23, G: 24, B: 28, A: 1},
 		OnStartup:        app.startup,
+		OnShutdown:       func(ctx context.Context) { app.cleanupTmp() },
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop: true,
 		},

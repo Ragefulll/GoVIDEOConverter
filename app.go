@@ -23,6 +23,7 @@ type App struct {
 	ctx        context.Context
 	mu         sync.Mutex
 	files      map[string]*VideoItem
+	tmpDirs    map[string]struct{}
 	cancel     context.CancelFunc
 	cancels    map[string]context.CancelFunc
 	ffmpegMu   sync.Mutex
@@ -89,6 +90,39 @@ type VideoMetadata struct {
 	Format       string  `json:"format"`
 	Rotation     int     `json:"rotation"`
 	CreationTime string  `json:"creationTime"`
+
+	FormatLongName string `json:"formatLongName"`
+	FileSize       int64  `json:"fileSize"`
+	Encoder        string `json:"encoder"`
+
+	VideoProfile     string  `json:"videoProfile"`
+	VideoLevel       string  `json:"videoLevel"`
+	AvgFPS           string  `json:"avgFps"`
+	DurationVideo    float64 `json:"durationVideo"`
+	BitrateVideo     int64   `json:"bitrateVideo"`
+	MaxBitrate       int64   `json:"maxBitrate"`
+	CodecTag         string  `json:"codecTag"`
+	NBFrames         int64   `json:"nbFrames"`
+	HasBFrames       int     `json:"hasBFrames"`
+	AspectRatio      string  `json:"aspectRatio"`
+	ColorSpace       string  `json:"colorSpace"`
+	ColorTransfer    string  `json:"colorTransfer"`
+	ColorPrimaries   string  `json:"colorPrimaries"`
+	ColorRange       string  `json:"colorRange"`
+	FieldOrder       string  `json:"fieldOrder"`
+	BitDepth         int     `json:"bitDepth"`
+
+	AudioSampleRate    int64   `json:"audioSampleRate"`
+	AudioChannels      int     `json:"audioChannels"`
+	AudioChannelLayout string  `json:"audioChannelLayout"`
+	AudioBitrate       int64   `json:"audioBitrate"`
+	AudioBitDepth      int     `json:"audioBitDepth"`
+	AudioDuration      float64 `json:"audioDuration"`
+	AudioNBFrames      int64   `json:"audioNbFrames"`
+
+	SubtitleCodec string `json:"subtitleCodec"`
+	DataCodec     string `json:"dataCodec"`
+	StreamCount   int    `json:"streamCount"`
 }
 
 type ProgressEvent struct {
@@ -111,24 +145,72 @@ type AddProgressEvent struct {
 	Done     bool    `json:"done"`
 }
 
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		*f = 0
+		return nil
+	}
+	n, err := strconv.Atoi(s)
+	if err == nil {
+		*f = flexInt(n)
+		return nil
+	}
+	fv, ferr := strconv.ParseFloat(s, 64)
+	if ferr != nil {
+		return nil
+	}
+	*f = flexInt(fv)
+	return nil
+}
+
 type ffprobeOutput struct {
 	Streams []struct {
-		CodecType    string            `json:"codec_type"`
-		CodecName    string            `json:"codec_name"`
-		Width        int               `json:"width"`
-		Height       int               `json:"height"`
-		PixFmt       string            `json:"pix_fmt"`
-		RFrameRate   string            `json:"r_frame_rate"`
-		Tags         map[string]string `json:"tags"`
-		SideDataList []struct {
-			Rotation int `json:"rotation"`
+		Index              int               `json:"index"`
+		CodecType          string            `json:"codec_type"`
+		CodecName          string            `json:"codec_name"`
+		CodecLongName      string            `json:"codec_long_name"`
+		Profile            string            `json:"profile"`
+		Width              int               `json:"width"`
+		Height             int               `json:"height"`
+		PixFmt             string            `json:"pix_fmt"`
+		Level              flexInt           `json:"level"`
+		HasBFrames         flexInt           `json:"has_b_frames"`
+		SampleAspectRatio  string            `json:"sample_aspect_ratio"`
+		DisplayAspectRatio string            `json:"display_aspect_ratio"`
+		RFrameRate         string            `json:"r_frame_rate"`
+		AvgFrameRate       string            `json:"avg_frame_rate"`
+		TimeBase           string            `json:"time_base"`
+		Duration           string            `json:"duration"`
+		BitRate            string            `json:"bit_rate"`
+		MaxBitRate         string            `json:"max_bit_rate"`
+		BitsPerRawSample   flexInt           `json:"bits_per_raw_sample"`
+		NBFrames           string            `json:"nb_frames"`
+		ColorRange         string            `json:"color_range"`
+		ColorSpace         string            `json:"color_space"`
+		ColorTransfer      string            `json:"color_transfer"`
+		ColorPrimaries     string            `json:"color_primaries"`
+		FieldOrder         string            `json:"field_order"`
+		CodecTagString     string            `json:"codec_tag_string"`
+		SampleRate         string            `json:"sample_rate"`
+		Channels           flexInt           `json:"channels"`
+		ChannelLayout      string            `json:"channel_layout"`
+		BitsPerSample      flexInt           `json:"bits_per_sample"`
+		Tags               map[string]string `json:"tags"`
+		SideDataList       []struct {
+			Rotation flexInt `json:"rotation"`
 		} `json:"side_data_list"`
 	} `json:"streams"`
 	Format struct {
-		FormatName string            `json:"format_name"`
-		Duration   string            `json:"duration"`
-		Bitrate    string            `json:"bit_rate"`
-		Tags       map[string]string `json:"tags"`
+		FormatName     string            `json:"format_name"`
+		FormatLongName string            `json:"format_long_name"`
+		Duration       string            `json:"duration"`
+		Bitrate        string            `json:"bit_rate"`
+		Size           string            `json:"size"`
+		ProbeScore     flexInt           `json:"probe_score"`
+		Tags           map[string]string `json:"tags"`
 	} `json:"format"`
 }
 
@@ -217,12 +299,13 @@ func (a *App) ListFiles() []VideoItem {
 
 func (a *App) ClearFiles() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	for _, cancel := range a.cancels {
 		cancel()
 	}
 	a.files = map[string]*VideoItem{}
 	a.cancels = map[string]context.CancelFunc{}
+	a.mu.Unlock()
+	a.cleanupTmp()
 }
 
 func (a *App) RemoveFile(id string) {
@@ -511,18 +594,54 @@ func probeVideo(ffprobe, path string) (VideoMetadata, error) {
 	}
 	var meta VideoMetadata
 	meta.Format = data.Format.FormatName
+	meta.FormatLongName = data.Format.FormatLongName
 	meta.Duration, _ = strconv.ParseFloat(data.Format.Duration, 64)
 	meta.Bitrate, _ = strconv.ParseInt(data.Format.Bitrate, 10, 64)
+	meta.FileSize, _ = strconv.ParseInt(data.Format.Size, 10, 64)
 	meta.CreationTime = data.Format.Tags["creation_time"]
+	meta.Encoder = data.Format.Tags["encoder"]
+	meta.StreamCount = len(data.Streams)
 	for _, stream := range data.Streams {
 		if stream.CodecType == "video" && meta.Codec == "" {
-			meta.Codec, meta.Width, meta.Height, meta.PixelFormat, meta.FPS = stream.CodecName, stream.Width, stream.Height, stream.PixFmt, stream.RFrameRate
+			meta.Codec = stream.CodecName
+			meta.Width, meta.Height = stream.Width, stream.Height
+			meta.PixelFormat = stream.PixFmt
+			meta.FPS = stream.RFrameRate
+			meta.VideoProfile = stream.Profile
+			meta.VideoLevel = strconv.Itoa(int(stream.Level))
+			meta.AvgFPS = stream.AvgFrameRate
+			meta.DurationVideo, _ = strconv.ParseFloat(stream.Duration, 64)
+			meta.BitrateVideo, _ = strconv.ParseInt(stream.BitRate, 10, 64)
+			meta.MaxBitrate, _ = strconv.ParseInt(stream.MaxBitRate, 10, 64)
+			meta.CodecTag = stream.CodecTagString
+			meta.NBFrames, _ = strconv.ParseInt(stream.NBFrames, 10, 64)
+			meta.HasBFrames = int(stream.HasBFrames)
+			meta.AspectRatio = stream.DisplayAspectRatio
+			meta.ColorSpace = stream.ColorSpace
+			meta.ColorTransfer = stream.ColorTransfer
+			meta.ColorPrimaries = stream.ColorPrimaries
+			meta.ColorRange = stream.ColorRange
+			meta.FieldOrder = stream.FieldOrder
+			meta.BitDepth = int(stream.BitsPerRawSample)
 			if len(stream.SideDataList) > 0 {
-				meta.Rotation = stream.SideDataList[0].Rotation
+				meta.Rotation = int(stream.SideDataList[0].Rotation)
 			}
 		}
 		if stream.CodecType == "audio" && meta.AudioCodec == "" {
 			meta.AudioCodec = stream.CodecName
+			meta.AudioSampleRate, _ = strconv.ParseInt(stream.SampleRate, 10, 64)
+			meta.AudioChannels = int(stream.Channels)
+			meta.AudioChannelLayout = stream.ChannelLayout
+			meta.AudioBitrate, _ = strconv.ParseInt(stream.BitRate, 10, 64)
+			meta.AudioBitDepth = int(stream.BitsPerSample)
+			meta.AudioDuration, _ = strconv.ParseFloat(stream.Duration, 64)
+			meta.AudioNBFrames, _ = strconv.ParseInt(stream.NBFrames, 10, 64)
+		}
+		if stream.CodecType == "subtitle" && meta.SubtitleCodec == "" {
+			meta.SubtitleCodec = stream.CodecName
+		}
+		if stream.CodecType == "data" && meta.DataCodec == "" {
+			meta.DataCodec = stream.CodecName
 		}
 	}
 	if meta.Codec == "" {

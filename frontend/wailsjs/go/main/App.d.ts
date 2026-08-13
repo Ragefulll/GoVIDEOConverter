@@ -22,11 +22,15 @@ export function ExportPresets(arg1:string):Promise<string>;
 
 export function GetUpdateStatus():Promise<main.UpdateStatus>;
 
+export function HasPreviewProxy(arg1:string):Promise<string>;
+
 export function ImportPresets():Promise<string>;
 
 export function InstallFFmpeg():Promise<void>;
 
 export function ListFiles():Promise<Array<main.VideoItem>>;
+
+export function MakePreviewProxy(arg1:string):Promise<string>;
 
 export function PickFFmpeg():Promise<main.FFmpegStatus>;
 

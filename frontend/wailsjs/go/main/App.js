@@ -42,6 +42,10 @@ export function GetUpdateStatus() {
   return window['go']['main']['App']['GetUpdateStatus']();
 }
 
+export function HasPreviewProxy(arg1) {
+  return window['go']['main']['App']['HasPreviewProxy'](arg1);
+}
+
 export function ImportPresets() {
   return window['go']['main']['App']['ImportPresets']();
 }
@@ -52,6 +56,10 @@ export function InstallFFmpeg() {
 
 export function ListFiles() {
   return window['go']['main']['App']['ListFiles']();
+}
+
+export function MakePreviewProxy(arg1) {
+  return window['go']['main']['App']['MakePreviewProxy'](arg1);
 }
 
 export function PickFFmpeg() {
