@@ -95,22 +95,22 @@ type VideoMetadata struct {
 	FileSize       int64  `json:"fileSize"`
 	Encoder        string `json:"encoder"`
 
-	VideoProfile     string  `json:"videoProfile"`
-	VideoLevel       string  `json:"videoLevel"`
-	AvgFPS           string  `json:"avgFps"`
-	DurationVideo    float64 `json:"durationVideo"`
-	BitrateVideo     int64   `json:"bitrateVideo"`
-	MaxBitrate       int64   `json:"maxBitrate"`
-	CodecTag         string  `json:"codecTag"`
-	NBFrames         int64   `json:"nbFrames"`
-	HasBFrames       int     `json:"hasBFrames"`
-	AspectRatio      string  `json:"aspectRatio"`
-	ColorSpace       string  `json:"colorSpace"`
-	ColorTransfer    string  `json:"colorTransfer"`
-	ColorPrimaries   string  `json:"colorPrimaries"`
-	ColorRange       string  `json:"colorRange"`
-	FieldOrder       string  `json:"fieldOrder"`
-	BitDepth         int     `json:"bitDepth"`
+	VideoProfile   string  `json:"videoProfile"`
+	VideoLevel     string  `json:"videoLevel"`
+	AvgFPS         string  `json:"avgFps"`
+	DurationVideo  float64 `json:"durationVideo"`
+	BitrateVideo   int64   `json:"bitrateVideo"`
+	MaxBitrate     int64   `json:"maxBitrate"`
+	CodecTag       string  `json:"codecTag"`
+	NBFrames       int64   `json:"nbFrames"`
+	HasBFrames     int     `json:"hasBFrames"`
+	AspectRatio    string  `json:"aspectRatio"`
+	ColorSpace     string  `json:"colorSpace"`
+	ColorTransfer  string  `json:"colorTransfer"`
+	ColorPrimaries string  `json:"colorPrimaries"`
+	ColorRange     string  `json:"colorRange"`
+	FieldOrder     string  `json:"fieldOrder"`
+	BitDepth       int     `json:"bitDepth"`
 
 	AudioSampleRate    int64   `json:"audioSampleRate"`
 	AudioChannels      int     `json:"audioChannels"`
@@ -522,41 +522,31 @@ func (a *App) processOneOutput(ctx context.Context, item *VideoItem, s Settings,
 	a.emit(item, "Обработка", 1, output, "", 0, 0, "")
 
 	tmp := strings.TrimSuffix(output, filepath.Ext(output)) + ".partial." + strconv.FormatInt(time.Now().UnixNano(), 36) + filepath.Ext(output)
+	passlog := ""
+	if usesTwoPass(s) {
+		passlog = strings.TrimSuffix(tmp, filepath.Ext(tmp)) + ".vp9pass"
+		if !a.runPass(ctx, ffmpeg, vp9Pass1Args(item, passlog, s), item, output, true, true) {
+			_ = os.Remove(tmp)
+			_ = os.Remove(passlog + "-0.log")
+			_ = os.Remove(passlog + "-1.log")
+			return false
+		}
+	}
 	args := ffmpegArgs(item, tmp, s)
-	cmd := newCommandContext(ctx, ffmpeg, args...)
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
-		a.emit(item, "Ошибка", 0, output, err.Error(), 0, 0, "")
-		return false
+	if usesTwoPass(s) {
+		tail := []string{"-progress", "pipe:1", "-nostats", "-f", muxerName(s), tmp}
+		args = args[:len(args)-len(tail)]
+		args = append(args, "-pass", "2", "-passlogfile", passlog)
+		args = append(args, tail...)
 	}
-	scanner := bufio.NewScanner(stdout)
-	progress := map[string]string{}
-	for scanner.Scan() {
-		line := scanner.Text()
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		progress[parts[0]] = parts[1]
-		if parts[0] == "progress" {
-			pct := progressPercent(progress["out_time_ms"], item.Meta.Duration)
-			frame, _ := strconv.Atoi(progress["frame"])
-			fps, _ := strconv.ParseFloat(progress["fps"], 64)
-			a.emit(item, "Обработка", pct, output, "", frame, fps, progress["speed"])
-		}
-	}
-	err := cmd.Wait()
-	if ctx.Err() != nil {
+	if !a.runPass(ctx, ffmpeg, args, item, output, false, false) {
 		_ = os.Remove(tmp)
-		a.emit(item, "Отменено", item.Progress, output, "", 0, 0, "")
+		_ = os.Remove(passlog + "-0.log")
+		_ = os.Remove(passlog + "-1.log")
 		return false
 	}
-	if err != nil {
-		_ = os.Remove(tmp)
-		a.emit(item, "Ошибка", item.Progress, output, err.Error(), 0, 0, "")
-		return false
-	}
+	_ = os.Remove(passlog + "-0.log")
+	_ = os.Remove(passlog + "-1.log")
 	if s.ValidateDecode {
 		if err := validateOutput(ctx, ffmpeg, tmp); err != nil {
 			_ = os.Remove(tmp)
@@ -690,6 +680,72 @@ func ffmpegArgs(item *VideoItem, output string, s Settings) []string {
 	return args
 }
 
+func usesTwoPass(s Settings) bool {
+	return s.CompressionMode != "crf" && encoderName(s) == "libvpx-vp9"
+}
+
+func vp9Pass1Args(item *VideoItem, passlog string, s Settings) []string {
+	br, mr, bs := bitrateFor(s, s.Resolution)
+	return []string{
+		"-hide_banner", "-nostdin", "-y", "-i", item.Path,
+		"-map", "0:v:0", "-an",
+		"-c:v", "libvpx-vp9",
+		"-b:v", kb(br), "-maxrate", kb(mr), "-bufsize", kb(bs),
+		"-row-mt", "1", "-tile-columns", "4", "-cpu-used", "4",
+		"-pass", "1", "-passlogfile", passlog,
+		"-f", "null", "NUL",
+	}
+}
+
+func (a *App) runPass(ctx context.Context, ffmpeg string, args []string, item *VideoItem, output string, quiet bool, noProgress bool) bool {
+	cmd := newCommandContext(ctx, ffmpeg, args...)
+	if quiet {
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		if err := cmd.Run(); err != nil {
+			if ctx.Err() != nil {
+				a.emit(item, "Отменено", item.Progress, output, "", 0, 0, "")
+			} else {
+				a.emit(item, "Ошибка", item.Progress, output, err.Error(), 0, 0, "")
+			}
+			return false
+		}
+		return true
+	}
+	stdout, _ := cmd.StdoutPipe()
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		a.emit(item, "Ошибка", 0, output, err.Error(), 0, 0, "")
+		return false
+	}
+	scanner := bufio.NewScanner(stdout)
+	progress := map[string]string{}
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		progress[parts[0]] = parts[1]
+		if parts[0] == "progress" && !noProgress {
+			pct := progressPercent(progress["out_time_ms"], item.Meta.Duration)
+			frame, _ := strconv.Atoi(progress["frame"])
+			fps, _ := strconv.ParseFloat(progress["fps"], 64)
+			a.emit(item, "Обработка", pct, output, "", frame, fps, progress["speed"])
+		}
+	}
+	err := cmd.Wait()
+	if ctx.Err() != nil {
+		a.emit(item, "Отменено", item.Progress, output, "", 0, 0, "")
+		return false
+	}
+	if err != nil {
+		a.emit(item, "Ошибка", item.Progress, output, err.Error(), 0, 0, "")
+		return false
+	}
+	return true
+}
+
 func audioEncoder(s Settings) string {
 	if containerName(s) == "webm" {
 		return "libopus"
@@ -773,6 +829,13 @@ func normalizeSettings(s Settings) Settings {
 func resolveAutoCodec(s Settings, item *VideoItem) Settings {
 	if s.Codec == "" || s.Codec == "auto" {
 		s.Codec = codecFromSource(item.Meta.Codec)
+	}
+	if containerName(s) == "webm" {
+		switch s.Codec {
+		case "vp8", "vp9", "av1":
+		default:
+			s.Codec = "vp9"
+		}
 	}
 	if s.Container == "" || s.Container == "auto" {
 		s.Container = defaultContainer(s.Codec)
@@ -920,7 +983,21 @@ func kb(v int) string {
 
 func bitrateFor(s Settings, resolution string) (bitrate, maxrate, bufsize int) {
 	if b, ok := s.BitrateByResolution[resolution]; ok && b.BitrateKbps > 0 {
-		return b.BitrateKbps, b.MaxrateKbps, b.BufsizeKbps
+		bitrate, maxrate, bufsize = b.BitrateKbps, b.MaxrateKbps, b.BufsizeKbps
+	} else {
+		bitrate, maxrate, bufsize = s.BitrateKbps, s.MaxrateKbps, s.BufsizeKbps
 	}
-	return s.BitrateKbps, s.MaxrateKbps, s.BufsizeKbps
+	factor := codecBitrateFactor(s.Codec)
+	return int(float64(bitrate) * factor), int(float64(maxrate) * factor), int(float64(bufsize) * factor)
+}
+
+func codecBitrateFactor(codec string) float64 {
+	switch codec {
+	case "vp9":
+		return 0.5
+	case "av1":
+		return 0.4
+	default:
+		return 1.0
+	}
 }

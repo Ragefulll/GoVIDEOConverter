@@ -21,7 +21,7 @@ function seedResBitrates() {
 const help = {
   presets: 'Пресет — сохраненный набор настроек. Выберите пресет, чтобы применить сохраненные параметры, или сохраните текущие настройки под новым именем. Импорт/экспорт позволяют перенести пресеты между устройствами в виде JSON-файла.',
   resolution: 'Целевые разрешения. Можно выбрать несколько — для каждого будет создано отдельное видео с префиксом разрешения (например 720_ и 1080_). Битрейт/maxrate/bufsize ниже относятся к выбранному (активному) разрешению и хранятся отдельно для каждого.',
-  codec: 'Видеокодек выходного файла. auto подбирает кодек по исходнику. h264 совместим почти везде, hevc/av1 дают лучшее сжатие, vp9 обычно для webm, prores/ffv1 для монтажных или архивных задач.',
+  codec: 'Видеокодек выходного файла. auto подбирает кодек по исходнику. h264 совместим почти везде, hevc/av1 дают лучшее сжатие, vp9 обычно для webm, prores/ffv1 для монтажных или архивных задач. При выборе контейнера webm кодек автоматически ставится vp9. Для vp9 и av1 целевой битрейт автоматически снижается (vp9 ~50%, av1 ~40% от значения h264) — при том же качестве файл получается заметно меньше. Для vp9 в режиме битрейта используется двухпроходное кодирование для точного соответствия размеру.',
   encoder: 'FFmpeg-энкодер. auto выбирает программный энкодер по кодеку: libx264, libx265, libsvtav1, libvpx-vp9, prores_ks, ffv1. Можно указать вручную: h264_nvenc, hevc_nvenc, av1_nvenc, h264_qsv, hevc_qsv, av1_qsv, h264_amf, hevc_amf, libx264, libx265, libsvtav1, libaom-av1, libvpx-vp9, prores_ks, ffv1.',
   container: 'Формат контейнера. auto подбирает контейнер по кодеку: mp4 для h264/hevc/av1, webm для vp9, mov для prores, mkv для ffv1.',
   compressionMode: 'Режим управления сжатием. bitrate держит заданный поток, CRF держит визуальное качество: меньше CRF - выше качество и больше размер.',
@@ -1028,6 +1028,12 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   await StartProcessing(collectSettings());
 });
 ['360','720','1080','2k','4k'].forEach(r => document.getElementById('res-' + r).addEventListener('change', onResolutionChange));
+document.getElementById('container').addEventListener('change', event => {
+  if (event.target.value === 'webm') {
+    const codec = document.getElementById('codec');
+    if (codec && codec.value !== 'vp9' && codec.value !== 'av1') codec.value = 'vp9';
+  }
+});
 document.getElementById('presetSelect').addEventListener('change', event => {
   if (event.target.value !== '') applyPreset(loadPresets(), Number(event.target.value));
 });
