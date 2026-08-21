@@ -553,6 +553,7 @@ function setPreviewTime(forceCur) {
 let makingProxy = false;
 let previewSrcKind = 'none'; // 'none' | 'native' | 'proxy'
 const DEFAULT_HINT = 'Формат не поддерживается для прямого просмотра. Можно создать превью через FFmpeg.';
+const NATIVE_PREVIEW_MAX_BYTES = 500 * 1024 * 1024;
 
 function setPreviewSrc(path, kind) {
   previewSrcKind = kind;
@@ -587,7 +588,7 @@ function loadPreview(file) {
   }
   previewFps = parseFloat(file.meta && file.meta.fps) || 30;
   wrap.classList.remove('empty');
-  if (!isNativelyPlayable(file)) {
+  if (!isNativelyPlayable(file) || (file.size && file.size > NATIVE_PREVIEW_MAX_BYTES)) {
     wrap.classList.add('no-video');
     checkPreviewCache(file);
     return;
